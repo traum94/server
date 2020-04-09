@@ -63,12 +63,13 @@ Created 9/20/1997 Heikki Tuuri
 # include "sync0sync.h"
 #else /* !UNIV_HOTBACKUP */
 
-
 /** This is set to FALSE if the backup was originally taken with the
 mysqlbackup --include regexp option: then we do not want to create tables in
 directories which were not included */
 UNIV_INTERN ibool	recv_replay_file_ops	= TRUE;
 #endif /* !UNIV_HOTBACKUP */
+
+extern MYSQL_PLUGIN_IMPORT bool opt_bin_log;
 
 /** Log records are stored in the hash table in chunks at most of this size;
 this must be less than UNIV_PAGE_SIZE as it is stored in the buffer pool */
@@ -3301,10 +3302,10 @@ void
 recv_recovery_from_checkpoint_finish(void)
 /*======================================*/
 {
-	if (recv_needed_recovery) {
-		trx_sys_print_mysql_master_log_pos();
-		trx_sys_print_mysql_binlog_offset();
-	}
+  if (opt_bin_log) {
+    trx_sys_print_mysql_master_log_pos();
+    trx_sys_print_mysql_binlog_offset();
+  }
 
 	if (recv_sys->found_corrupt_log) {
 

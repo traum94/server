@@ -1,0 +1,95 @@
+# ==== Purpose ====
+#
+# Test verifies truncation of multiple binary logs.
+#
+# ==== Implementation ====
+#
+# Steps:
+#
+# ==== References ====
+#
+# MDEV-21117: --tc-heuristic-recover=rollback is not replication safe
+
+
+--source include/have_innodb.inc
+--source include/not_embedded.inc
+--source include/have_log_bin.inc
+--source include/have_debug.inc
+--source include/have_debug_sync.inc
+--source include/have_binlog_format_row.inc
+
+SET @old_max_binlog_size= @@GLOBAL.max_binlog_size;
+SET GLOBAL max_binlog_size= 4096;
+call mtr.add_suppression("tc-heuristic-recover failed to open purge index file");
+call mtr.add_suppression("Can't init tc log");
+call mtr.add_suppression("Aborting");
+
+RESET MASTER;
+
+CREATE TABLE t1 (a INT PRIMARY KEY, b MEDIUMTEXT) ENGINE=Innodb;
+connect(master1,localhost,root,,);
+connect(master2,localhost,root,,);
+
+--connection master1
+# Hold insert after write to binlog and before "run_commit_ordered" in engine.
+# Use "commit_after_release_LOCK_log" sync point. This point is reached after
+# the binary log end position is updated which actually triggers binlog to be
+# rotated.
+SET DEBUG_SYNC= "commit_after_release_LOCK_log SIGNAL con1_ready WAIT_FOR con1_go";
+send INSERT INTO t1 VALUES (2, REPEAT("x", 4100));
+
+--connection master2
+SET DEBUG_SYNC= "now WAIT_FOR con1_ready";
+--echo "List of binary logs"
+--source include/show_binary_logs.inc
+--write_file $MYSQLTEST_VARDIR/tmp/mysqld.1.expect
+wait
+EOF
+
+--source include/kill_mysqld.inc
+--source include/wait_until_disconnected.inc
+
+#
+# Server restart
+#
+--echo "Test 1"
+--exec echo "restart: --tc-heuristic-recover=ROLLBACK --debug-dbug=d,simulate_innodb_forget_commit_pos,fault_injection_openning_purge_index" >  $MYSQLTEST_VARDIR/tmp/mysqld.1.expect
+--enable_reconnect
+--source include/wait_until_disconnected.inc
+
+--echo "Test 2"
+--exec echo "restart: --tc-heuristic-recover=ROLLBACK --debug-dbug=d,simulate_innodb_forget_commit_pos,crash_before_sync_purge_index_file" > $MYSQLTEST_VARDIR/tmp/mysqld.1.expect
+--enable_reconnect
+--source include/wait_until_connected_again.inc
+
+--append_file $MYSQLTEST_VARDIR/tmp/mysqld.1.expect
+restart: --tc-heuristic-recover=ROLLBACK --debug-dbug=d,simulate_innodb_forget_commit_pos,crash_after_sync_purge_index_file
+EOF
+--source include/wait_until_disconnected.inc
+
+--append_file $MYSQLTEST_VARDIR/tmp/mysqld.1.expect
+restart: --tc-heuristic-recover=ROLLBACK --debug-dbug=d,simulate_innodb_forget_commit_pos,crash_after_index_file_resize
+EOF
+
+--source include/wait_until_disconnected.inc
+--append_file $MYSQLTEST_VARDIR/tmp/mysqld.1.expect
+restart: --tc-heuristic-recover=ROLLBACK --debug-dbug=d,simulate_innodb_forget_commit_pos
+EOF
+
+--source include/wait_until_disconnected.inc
+--append_file $MYSQLTEST_VARDIR/tmp/mysqld.1.expect
+restart:
+EOF
+
+connection default;
+--enable_reconnect
+--source include/wait_until_connected_again.inc
+
+--echo "Zero rows shoule be present in table"
+SELECT COUNT(*) FROM t1;
+
+SELECT @@GLOBAL.gtid_current_pos;
+
+DROP TABLE t1;
+SELECT @@GLOBAL.gtid_binlog_state;
+

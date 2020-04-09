@@ -16470,6 +16470,9 @@ innobase_xa_recover(
 {
 	DBUG_ASSERT(hton == innodb_hton_ptr);
 
+   mysql_bin_log.last_commit_pos_offset= trx_sys_mysql_bin_log_pos;
+   strmake_buf(mysql_bin_log.last_commit_pos_file, trx_sys_mysql_bin_log_name);
+
 	if (len == 0 || xid_list == NULL) {
 
 		return(0);
