@@ -1,0 +1,4 @@
+--echo #
+--echo # MDEV-23769: MTR can abort before it prints the test result summary
+--echo #
+show databases;

@@ -1005,6 +1005,13 @@ sub run_worker ($) {
         stop_servers(reverse all_servers());
         if(check_warnings_post_shutdown($server)) {
           # Warnings appeared in log file(s) during final server shutdown.
+          # Make sure first to run statistics
+          my $tests= collect_test_cases($opt_reorder, $opt_suites, \@opt_cases, \@opt_skip_test_list);
+          my ($prefix, $fail, $completed, $extra_warnings)=
+          run_test_server($server, $tests, $opt_parallel);
+          mtr_print_line();
+          print_total_times($opt_parallel) if $opt_report_times;
+          mtr_report_stats($prefix, $fail, $completed, $extra_warnings);
           exit(1);
         }
       }
@@ -3971,6 +3978,7 @@ sub run_testcase ($$) {
     if (start_servers($tinfo))
     {
       report_failure_and_restart($tinfo);
+      unlink $path_current_testlog;
       return 1;
     }
   }
