@@ -55,29 +55,17 @@ static int my_b_encr_read(IO_CACHE *info, uchar *Buffer, size_t Count)
     DBUG_RETURN(MY_TEST(Count));
   }
 
-  if (info->seek_not_done)
-  {
-    my_off_t wpos;
-
-    pos_offset= pos_in_file % info->buffer_length;
-    pos_in_file-= pos_offset;
-
-    wpos= pos_in_file / info->buffer_length * crypt_data->block_length;
-
-    if ((mysql_file_seek(info->file, wpos, MY_SEEK_SET, MYF(0))
-        == MY_FILEPOS_ERROR))
-    {
-      info->error= -1;
-      DBUG_RETURN(1);
-    }
-    info->seek_not_done= 0;
-  }
-
   do
   {
     size_t copied;
     uint elength, wlength, length;
     uchar iv[MY_AES_BLOCK_SIZE]= {0};
+
+    my_off_t wpos;
+    pos_offset= pos_in_file % info->buffer_length;
+    pos_in_file-= pos_offset;
+
+    wpos= pos_in_file / info->buffer_length * crypt_data->block_length;
 
     DBUG_ASSERT(pos_in_file % info->buffer_length == 0);
 
@@ -86,7 +74,8 @@ static int my_b_encr_read(IO_CACHE *info, uchar *Buffer, size_t Count)
     else
       wlength= crypt_data->last_block_length;
 
-    if (mysql_file_read(info->file, wbuffer, wlength, info->myflags | MY_NABP))
+    if (mysql_file_pread(info->file, wbuffer, wlength,
+                         wpos, info->myflags | MY_NABP))
     {
       info->error= -1;
       DBUG_RETURN(1);

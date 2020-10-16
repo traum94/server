@@ -250,7 +250,7 @@ int init_io_cache(IO_CACHE *info, File file, size_t cachesize,
 	  info->write_buffer= info->buffer + cachesize;
         else
           info->write_buffer= info->buffer;
-	info->alloced_buffer= 1;
+	info->alloced_buffer= buffer_block;
 	break;					/* Enough memory found */
       }
       if (cachesize == min_cache)
@@ -324,14 +324,15 @@ int init_slave_io_cache(IO_CACHE *master, IO_CACHE *slave)
   DBUG_ASSERT(!master->share);
   DBUG_ASSERT(master->alloced_buffer);
 
-  if (!(slave_buf= (uchar*)my_malloc(master->buffer_length, MYF(0))))
+  if (!(slave_buf= (uchar*)my_malloc(master->alloced_buffer, MYF(0))))
   {
     return 1;
   }
   memcpy(slave, master, sizeof(IO_CACHE));
   slave->buffer= slave_buf;
 
-  memcpy(slave->buffer, master->buffer, master->buffer_length);
+  memcpy(slave->buffer, master->buffer, master->alloced_buffer);
+
   slave->read_pos= slave->buffer + (master->read_pos - master->buffer);
   slave->read_end= slave->buffer + (master->read_end - master->buffer);
 
@@ -652,44 +653,6 @@ int _my_b_cache_read(IO_CACHE *info, uchar *Buffer, size_t Count)
   pos_in_file=info->pos_in_file+ (size_t) (info->read_end - info->buffer);
 
   /*
-    Whenever a function which operates on IO_CACHE flushes/writes
-    some part of the IO_CACHE to disk it will set the property
-    "seek_not_done" to indicate this to other functions operating
-    on the IO_CACHE.
-  */
-  if (info->seek_not_done)
-  {
-    if ((mysql_file_seek(info->file, pos_in_file, MY_SEEK_SET, MYF(0)) 
-        != MY_FILEPOS_ERROR))
-    {
-      /* No error, reset seek_not_done flag. */
-      info->seek_not_done= 0;
-
-      if (info->next_file_user)
-      {
-        IO_CACHE *c;
-        for (c= info->next_file_user;
-             c!= info;
-             c= c->next_file_user)
-        {
-          c->seek_not_done= 1;
-        }
-      }
-    }
-    else
-    {
-      /*
-        If the seek failed and the error number is ESPIPE, it is because
-        info->file is a pipe or socket or FIFO.  We never should have tried
-        to seek on that.  See Bugs#25807 and #22828 for more info.
-      */
-      DBUG_ASSERT(my_errno != ESPIPE);
-      info->error= -1;
-      DBUG_RETURN(1);
-    }
-  }
-
-  /*
     Calculate, how much we are within a IO_SIZE block. Ideally this
     should be zero.
   */
@@ -706,7 +669,6 @@ int _my_b_cache_read(IO_CACHE *info, uchar *Buffer, size_t Count)
     {
       /* End of file. Return, what we did copy from the buffer. */
       info->error= (int) left_length;
-      info->seek_not_done=1;
       DBUG_RETURN(1);
     }
     /*
@@ -715,7 +677,8 @@ int _my_b_cache_read(IO_CACHE *info, uchar *Buffer, size_t Count)
       end aligned with a block.
     */
     length= IO_ROUND_DN(Count) - diff_length;
-    if ((read_length= mysql_file_read(info->file,Buffer, length, info->myflags))
+    if ((read_length= mysql_file_pread(info->file, Buffer, length,
+                                       pos_in_file, info->myflags))
 	!= length)
     {
       /*
@@ -724,7 +687,6 @@ int _my_b_cache_read(IO_CACHE *info, uchar *Buffer, size_t Count)
       */
       info->error= (read_length == (size_t) -1 ? -1 :
 		    (int) (read_length+left_length));
-      info->seek_not_done=1;
       DBUG_RETURN(1);
     }
     Count-=length;
@@ -768,18 +730,9 @@ int _my_b_cache_read(IO_CACHE *info, uchar *Buffer, size_t Count)
   }
   else 
   {
-    if (info->next_file_user)
-    {
-      IO_CACHE *c;
-      for (c= info->next_file_user;
-           c!= info;
-           c= c->next_file_user)
-      {
-        c->seek_not_done= 1;
-      }
-    }
-    if ((length= mysql_file_read(info->file,info->buffer, max_length,
-                            info->myflags)) < Count ||
+
+    if ((length= mysql_file_pread(info->file, info->buffer, max_length,
+                                  pos_in_file, info->myflags)) < Count ||
 	   length == (size_t) -1)
     {
       /*
@@ -792,7 +745,6 @@ int _my_b_cache_read(IO_CACHE *info, uchar *Buffer, size_t Count)
       /* For a read error, return -1, otherwise, what we got in total. */
       info->error= length == (size_t) -1 ? -1 : (int) (length+left_length);
       info->read_pos=info->read_end=info->buffer;
-      info->seek_not_done=1;
       DBUG_RETURN(1);
     }
   }
@@ -1251,23 +1203,8 @@ static int _my_b_cache_read_r(IO_CACHE *cache, uchar *Buffer, size_t Count)
         len= 0;
       else
       {
-        /*
-          Whenever a function which operates on IO_CACHE flushes/writes
-          some part of the IO_CACHE to disk it will set the property
-          "seek_not_done" to indicate this to other functions operating
-          on the IO_CACHE.
-        */
-        if (cache->seek_not_done)
-        {
-          if (mysql_file_seek(cache->file, pos_in_file, MY_SEEK_SET, MYF(0))
-              == MY_FILEPOS_ERROR)
-          {
-            cache->error= -1;
-            unlock_io_cache(cache);
-            DBUG_RETURN(1);
-          }
-        }
-        len= mysql_file_read(cache->file, cache->buffer, length, cache->myflags);
+        len= mysql_file_pread(cache->file, cache->buffer, length,
+                              pos_in_file, cache->myflags);
       }
       DBUG_PRINT("io_cache_share", ("read %lu bytes", (ulong) len));
 
@@ -1395,18 +1332,6 @@ static int _my_b_seq_read(IO_CACHE *info, uchar *Buffer, size_t Count)
        (size_t) (info->read_end - info->buffer)) >= info->end_of_file)
     goto read_append_buffer;
 
-  /*
-    With read-append cache we must always do a seek before we read,
-    because the write could have moved the file pointer astray
-  */
-  if (mysql_file_seek(info->file, pos_in_file, MY_SEEK_SET, MYF(0)) == MY_FILEPOS_ERROR)
-  {
-   info->error= -1;
-   unlock_append_buffer(info);
-   return (1);
-  }
-  info->seek_not_done=0;
-
   diff_length= (size_t) (pos_in_file & (IO_SIZE-1));
 
   /* now the second stage begins - read from file descriptor */
@@ -1416,8 +1341,8 @@ static int _my_b_seq_read(IO_CACHE *info, uchar *Buffer, size_t Count)
     size_t read_length;
 
     length= IO_ROUND_DN(Count) - diff_length;
-    if ((read_length= mysql_file_read(info->file,Buffer, length,
-                                      info->myflags)) == (size_t) -1)
+    if ((read_length= mysql_file_pread(info->file,Buffer, length, pos_in_file,
+                                       info->myflags)) == (size_t) -1)
     {
       info->error= -1;
       unlock_append_buffer(info);
@@ -1450,7 +1375,8 @@ static int _my_b_seq_read(IO_CACHE *info, uchar *Buffer, size_t Count)
   }
   else
   {
-    length= mysql_file_read(info->file,info->buffer, max_length, info->myflags);
+    length= mysql_file_pread(info->file, info->buffer, max_length,
+                             pos_in_file, info->myflags);
     if (length == (size_t) -1)
     {
       info->error= -1;
@@ -1618,19 +1544,13 @@ int _my_b_async_read(IO_CACHE *info, uchar *Buffer, size_t Count)
       info->error=(int) (read_length+left_length);
       return 1;
     }
-    
-    if (mysql_file_seek(info->file, next_pos_in_file, MY_SEEK_SET, MYF(0))
-        == MY_FILEPOS_ERROR)
-    {
-      info->error= -1;
-      return (1);
-    }
 
     read_length=IO_SIZE*2- (size_t) (next_pos_in_file & (IO_SIZE-1));
     if (Count < read_length)
     {					/* Small block, read to cache */
-      if ((read_length=mysql_file_read(info->file,info->request_pos,
-			               read_length, info->myflags)) == (size_t) -1)
+      if ((read_length=mysql_file_pread(info->file, info->request_pos,
+			                                 read_length, next_pos_in_file,
+                                       info->myflags)) == (size_t) -1)
         return info->error= -1;
       use_length=MY_MIN(Count,read_length);
       memcpy(Buffer,info->request_pos,(size_t) use_length);
@@ -1650,7 +1570,8 @@ int _my_b_async_read(IO_CACHE *info, uchar *Buffer, size_t Count)
     }
     else
     {						/* Big block, don't cache it */
-      if ((read_length= mysql_file_read(info->file, Buffer, Count,info->myflags))
+      if ((read_length= mysql_file_pread(info->file, Buffer, Count,
+                                         next_pos_in_file, info->myflags))
 	  != Count)
       {
 	info->error= read_length == (size_t) -1 ? -1 : read_length+left_length;

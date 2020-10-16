@@ -482,12 +482,10 @@ typedef struct st_io_cache		/* Used when cacheing files */
   size_t  read_length;
   myf	myflags;			/* Flags used to my_read/my_write */
   /*
-    alloced_buffer is 1 if the buffer was allocated by init_io_cache() and
-    0 if it was supplied by the user.
-    Currently READ_NET is the only one that will use a buffer allocated
-    somewhere else
+    alloced_buffer is set to the size of the buffer allocated for the IO_CACHE.
+    Set to 0 if nothing is allocated
   */
-  my_bool alloced_buffer;
+  size_t alloced_buffer;
 #ifdef HAVE_AIOWAIT
   /*
     As inidicated by ifdef, this is for async I/O, which is not currently
