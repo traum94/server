@@ -25,7 +25,6 @@ my_bool _ma_write_static_record(MARIA_HA *info, const uchar *record)
       !info->append_insert_at_end)
   {
     my_off_t filepos=info->s->state.dellink;
-    info->rec_cache.seek_not_done=1;		/* We have done a seek */
     if (info->s->file_read(info, &temp[0],info->s->base.rec_reflength,
 		info->s->state.dellink+1,
 		 MYF(MY_NABP)))
@@ -60,7 +59,6 @@ my_bool _ma_write_static_record(MARIA_HA *info, const uchar *record)
     }
     else
     {
-      info->rec_cache.seek_not_done=1;		/* We have done a seek */
       if (info->s->file_write(info, record, info->s->base.reclength,
                               info->state->data_file_length,
                               info->s->write_flag))
@@ -88,7 +86,6 @@ my_bool _ma_update_static_record(MARIA_HA *info, MARIA_RECORD_POS pos,
                                  const uchar *oldrec __attribute__ ((unused)),
                                  const uchar *record)
 {
-  info->rec_cache.seek_not_done=1;		/* We have done a seek */
   return (info->s->file_write(info,
                               record, info->s->base.reclength,
 		    pos,
@@ -105,7 +102,6 @@ my_bool _ma_delete_static_record(MARIA_HA *info,
   temp[0]= '\0';			/* Mark that record is deleted */
   _ma_dpointer(info->s, temp+1, info->s->state.dellink);
   info->s->state.dellink= info->cur_row.lastpos;
-  info->rec_cache.seek_not_done=1;
   return (info->s->file_write(info, temp, 1+info->s->rec_reflength,
 		    info->cur_row.lastpos, MYF(MY_NABP)) != 0);
 }
@@ -122,12 +118,10 @@ my_bool _ma_cmp_static_record(register MARIA_HA *info,
     {
       DBUG_RETURN(1);
     }
-    info->rec_cache.seek_not_done=1;		/* We have done a seek */
   }
 
   if ((info->opt_flag & READ_CHECK_USED))
   {						/* If check isn't disabled  */
-    info->rec_cache.seek_not_done=1;		/* We have done a seek */
     if (info->s->file_read(info, info->rec_buff, info->s->base.reclength,
                            info->cur_row.lastpos, MYF(MY_NABP)))
       DBUG_RETURN(1);
@@ -148,7 +142,6 @@ my_bool _ma_cmp_static_unique(MARIA_HA *info, MARIA_UNIQUEDEF *def,
 {
   DBUG_ENTER("_ma_cmp_static_unique");
 
-  info->rec_cache.seek_not_done=1;		/* We have done a seek */
   if (info->s->file_read(info, info->rec_buff, info->s->base.reclength,
 	       pos, MYF(MY_NABP)))
     DBUG_RETURN(1);
@@ -178,7 +171,6 @@ int _ma_read_static_record(register MARIA_HA *info, register uchar *record,
 	info->rec_cache.pos_in_file <= pos &&
 	flush_io_cache(&info->rec_cache))
       DBUG_RETURN(my_errno);
-    info->rec_cache.seek_not_done=1;		/* We have done a seek */
 
     error= (int) info->s->file_read(info, record,info->s->base.reclength,
                                     pos, MYF(MY_NABP));
@@ -230,8 +222,6 @@ int _ma_read_rnd_static_record(MARIA_HA *info, uchar *buf,
       cache_length= (uint) (info->rec_cache.read_end -
                             info->rec_cache.read_pos);
     }
-    else
-      info->rec_cache.seek_not_done=1;		/* Filepos is changed */
   }
   locked=0;
   if (info->lock_type == F_UNLCK)

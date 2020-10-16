@@ -182,7 +182,6 @@ void my_b_seek(IO_CACHE *info,my_off_t pos)
 		     (pos & (IO_SIZE-1)));
   }
   info->pos_in_file=pos;
-  info->seek_not_done=1;
   DBUG_VOID_RETURN;
 }
 
@@ -250,7 +249,6 @@ my_off_t my_b_filelength(IO_CACHE *info)
   if (info->type == WRITE_CACHE)
     return my_b_tell(info);
 
-  info->seek_not_done= 1;
   return mysql_file_seek(info->file, 0, MY_SEEK_END, MYF(0));
 }
 

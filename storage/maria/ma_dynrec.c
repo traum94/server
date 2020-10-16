@@ -383,7 +383,6 @@ static int _ma_find_writepos(MARIA_HA *info,
     /* Deleted blocks exists;  Get last used block */
     *filepos=info->s->state.dellink;
     block_info.second_read=0;
-    info->rec_cache.seek_not_done=1;
     if (!(_ma_get_block_info(info, &block_info, info->dfile.file,
                              info->s->state.dellink) &
 	   BLOCK_DELETED))
@@ -756,7 +755,6 @@ int _ma_write_part_record(MARIA_HA *info,
   }
   else
   {
-    info->rec_cache.seek_not_done=1;
     if (info->s->file_write(info, *record-head_length,
                             length+extra_length+
                             del_length,filepos,info->s->write_flag))
@@ -1467,7 +1465,6 @@ int _ma_read_dynamic_record(MARIA_HA *info, uchar *buf,
          MARIA_BLOCK_INFO_HEADER_LENGTH) &&
         flush_io_cache(&info->rec_cache))
       goto err;
-    info->rec_cache.seek_not_done=1;
     if ((b_type= _ma_get_block_info(info, &block_info, file, filepos)) &
         (BLOCK_DELETED | BLOCK_ERROR | BLOCK_SYNC_ERROR |
          BLOCK_FATAL_ERROR))
@@ -1599,7 +1596,6 @@ my_bool _ma_cmp_dynamic_record(register MARIA_HA *info,
     if (flush_io_cache(&info->rec_cache))
       DBUG_RETURN(1);
   }
-  info->rec_cache.seek_not_done=1;
 
 	/* If nobody have touched the database we don't have to test rec */
 
@@ -1768,7 +1764,6 @@ int _ma_read_rnd_dynamic_record(MARIA_HA *info,
       if (!info_read)
       {						/* Check if changed */
 	info_read=1;
-	info->rec_cache.seek_not_done=1;
 	if (_ma_state_info_read_dsk(share->kfile.file, &share->state))
 	  goto panic;
       }
@@ -1797,7 +1792,6 @@ int _ma_read_rnd_dynamic_record(MARIA_HA *info,
 	  info->rec_cache.pos_in_file < filepos + MARIA_BLOCK_INFO_HEADER_LENGTH &&
 	  flush_io_cache(&info->rec_cache))
 	DBUG_RETURN(my_errno);
-      info->rec_cache.seek_not_done=1;
       b_type= _ma_get_block_info(info, &block_info, info->dfile.file, filepos);
     }
 

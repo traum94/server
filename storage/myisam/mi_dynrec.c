@@ -398,7 +398,6 @@ static int _mi_find_writepos(MI_INFO *info,
     /* Deleted blocks exists;  Get last used block */
     *filepos=info->s->state.dellink;
     block_info.second_read=0;
-    info->rec_cache.seek_not_done=1;
     if (!(_mi_get_block_info(&block_info,info->dfile,info->s->state.dellink) &
 	   BLOCK_DELETED))
     {
@@ -763,7 +762,6 @@ int _mi_write_part_record(MI_INFO *info,
   }
   else
   {
-    info->rec_cache.seek_not_done=1;
     if (info->s->file_write(info,(uchar*) *record-head_length,length+extra_length+
 		  del_length,filepos,info->s->write_flag))
       goto err;
@@ -954,7 +952,6 @@ static int update_dynamic_record(MI_INFO *info, my_off_t filepos, uchar *record,
       IO cache must be notified as it may still have cached
       data, which has to be flushed later.
     */
-    info->rec_cache.seek_not_done= 1;
     if (delete_dynamic_record(info,block_info.next_filepos,1))
       goto err;
   }
@@ -1462,7 +1459,6 @@ int _mi_read_dynamic_record(MI_INFO *info, my_off_t filepos, uchar *buf)
 	  info->rec_cache.pos_in_file < filepos + MI_BLOCK_INFO_HEADER_LENGTH &&
 	  flush_io_cache(&info->rec_cache))
 	goto err;
-      info->rec_cache.seek_not_done=1;
       if ((b_type= _mi_get_block_info(&block_info, file, filepos))
 	  & (BLOCK_DELETED | BLOCK_ERROR | BLOCK_SYNC_ERROR |
 	     BLOCK_FATAL_ERROR))
@@ -1584,7 +1580,6 @@ int _mi_cmp_dynamic_record(register MI_INFO *info, register const uchar *record)
     if (flush_io_cache(&info->rec_cache))
       DBUG_RETURN(-1);
   }
-  info->rec_cache.seek_not_done=1;
 
 	/* If nobody have touched the database we don't have to test rec */
 
@@ -1748,7 +1743,6 @@ int _mi_read_rnd_dynamic_record(MI_INFO *info, uchar *buf,
       if (!info_read)
       {						/* Check if changed */
 	info_read=1;
-	info->rec_cache.seek_not_done=1;
 	if (mi_state_info_read_dsk(share->kfile,&share->state,1))
 	  goto panic;
       }
@@ -1773,7 +1767,6 @@ int _mi_read_rnd_dynamic_record(MI_INFO *info, uchar *buf,
 	  info->rec_cache.pos_in_file < filepos + MI_BLOCK_INFO_HEADER_LENGTH &&
 	  flush_io_cache(&info->rec_cache))
 	DBUG_RETURN(my_errno);
-      info->rec_cache.seek_not_done=1;
       b_type=_mi_get_block_info(&block_info,info->dfile,filepos);
     }
 

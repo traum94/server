@@ -6,6 +6,7 @@ SET debug_dbug='+d,simulate_file_write_error';
 set @@max_heap_table_size=128*1024;
 analyze table t1;
 Table	Op	Msg_type	Msg_text
+test.t1	analyze	error	28 when updating keyfile
 test.t1	analyze	Error	Error writing file 'tmp-file' (Errcode: 28 "No space left on device")
 test.t1	analyze	status	Operation failed
 SET debug_dbug= @saved_dbug;

@@ -158,6 +158,17 @@ size_t my_pwrite(int Filedes, const uchar *Buffer, size_t Count,
 #else
     writtenbytes= pwrite(Filedes, Buffer, Count, offset);
 #endif
+
+    /**
+       To simulate the write error set the errno = error code
+       and the number pf written bytes to -1.
+     */
+    DBUG_EXECUTE_IF ("simulate_file_write_error",
+                     if (!errors) {
+                       errno= ENOSPC;
+                       writtenbytes= (size_t) -1;
+                     });
+
     if (writtenbytes == Count)
       break;
     my_errno= errno;
