@@ -9509,19 +9509,24 @@ int TC_LOG::using_heuristic_recover(const char* opt_name)
 {
     LOG_INFO log_info;
     int error;
+    HASH xids;
+    MEM_ROOT mem_root;
 
-  if (!tc_heuristic_recover)
-    return 0;
+    if (!tc_heuristic_recover)
+      return 0;
 
   sql_print_information("Heuristic crash recovery mode");
-
-  if (ha_recover(0))
+  if (tc_heuristic_recover == TC_RECOVER_BINLOG_TRUNCATE)
+    (void) my_hash_init(&xids, &my_charset_bin, TC_LOG_PAGE_SIZE/3, 0,
+                        sizeof(my_xid), 0, 0, MYF(0));
+  if (ha_recover(&xids, &mem_root))
   {
     sql_print_error("Heuristic crash recovery failed");
+    goto err;
   }
 
   if (!strcmp(opt_name, opt_bin_logname) &&
-      tc_heuristic_recover == TC_HEURISTIC_RECOVER_ROLLBACK)
+      tc_heuristic_recover == TC_RECOVER_BINLOG_TRUNCATE)
   {
     if ((error= mysql_bin_log.find_log_pos(&log_info, NullS, 1)))
     {
@@ -9531,11 +9536,12 @@ int TC_LOG::using_heuristic_recover(const char* opt_name)
     }
     else
     {
-      if ((error= heuristic_binlog_rollback()))
+      if ((error= heuristic_binlog_rollback(&xids)))
         sql_print_error("Heuristic crash recovery of binary log failed.");
     }
   }
 
+err:
   sql_print_information("Please restart mysqld without --tc-heuristic-recover");
   return 1;
 }
@@ -9810,9 +9816,12 @@ int TC_LOG_BINLOG::get_binlog_checkpoint_file(char* checkpoint_file)
 }
 
 
+// TODO: rename the recovery mode
 /**
    Truncates the binary log, according to the transactions that got rolled
-   back from engine, during heuristic-recover=ROLLBACK. Global GTID state is
+   back from engines, during
+   heuristic-recover=ROLLBACK.
+   Global GTID state is
    adjusted as per the truncated binlog.
 
    Called from @c TC_LOG::using_heuristic_recover(const char* opt_name)
@@ -9824,73 +9833,39 @@ int TC_LOG_BINLOG::get_binlog_checkpoint_file(char* checkpoint_file)
     @retval 1 failure
 
 */
-int TC_LOG_BINLOG::heuristic_binlog_rollback()
+int TC_LOG_BINLOG::heuristic_binlog_rollback(HASH *xids)
 {
   int error=0;
 #ifdef HAVE_REPLICATION
   Log_event *ev= NULL;
-  char engine_commit_file[FN_REFLEN];
   char binlog_truncate_file_name[FN_REFLEN];
   char checkpoint_file[FN_REFLEN];
   my_off_t binlog_truncate_pos= 0;
-  my_off_t engine_commit_pos= 0;
   LOG_INFO log_info;
   const char *errmsg;
   IO_CACHE    log;
   File        file=-1;
   Format_description_log_event fdle(BINLOG_VERSION);
-  bool found_engine_commit_pos= false;
-  bool found_truncate_pos= false;
   bool is_safe= true;
   my_off_t tmp_truncate_pos=0;
   rpl_gtid last_gtid;
   bool last_gtid_standalone= false;
   bool last_gtid_valid= false;
-  bool is_checkpoint_based_recovery= false;
+  uchar last_gtid_extra_engines= 0;
 
-
-  DBUG_EXECUTE_IF("simulate_innodb_forget_commit_pos",
-                   {
-                     last_commit_pos_file[0]= 0;
-                   };);
-
-  // Initialize engine_commit_file/pos
-  if (last_commit_pos_file[0] != 0)
+  if ((error= get_binlog_checkpoint_file(checkpoint_file)))
   {
-    strmake_buf(engine_commit_file, last_commit_pos_file);
-    engine_commit_pos= last_commit_pos_offset;
-    sql_print_information("tc-heuristic-recover: Initialising heuristic "
-                          "rollback of binary log using last committed "
-                          "transaction specific binary log name:%s and "
-                          "position:%llu", last_commit_pos_file,
-                          last_commit_pos_offset);
-  }
-  else
-  {
-    if ((error= get_binlog_checkpoint_file(checkpoint_file)))
-    {
-      is_checkpoint_based_recovery= true;
       sql_print_error("tc-heuristic-recover: Failed to read latest checkpoint "
                       "binary log name.");
       goto end;
     }
-    strmake_buf(engine_commit_file, checkpoint_file);
-    sql_print_information("tc-heuristic-recover: Initialising heuristic "
-                          "rollback of binary log using last checkpoint "
-                          "file:%s.", engine_commit_file);
-    /*
-      If there is no engine specific commit file we are doing checkpoint file
-      based recovery. Hence we mark "found_engine_commit_pos" true, and start
-      looking for the first transactional event group with is the candidate for
-      rollback.
-    */
-    found_engine_commit_pos= true;
-  }
-
-  if ((error= find_log_pos(&log_info, engine_commit_file, 1)))
+  sql_print_information("tc-heuristic-recover: Initialising heuristic "
+                        "rollback of binary log using last checkpoint "
+                        "file:%s.", checkpoint_file);
+  if ((error= find_log_pos(&log_info, checkpoint_file, 1)))
   {
     sql_print_error("tc-heuristic-recover: Failed to locate binary log file:%s "
-                    "in index file. Error:%d", engine_commit_file, error);
+                    "in index file. Error:%d", checkpoint_file, error);
     goto end;
   }
   if ((file= open_binlog(&log, log_info.log_file_name, &errmsg)) < 0 ||
@@ -9925,19 +9900,58 @@ int TC_LOG_BINLOG::heuristic_binlog_rollback()
             opt_master_verify_checksum)) && ev->is_valid())
     {
       enum Log_event_type typ= ev->get_type_code();
-      switch (typ)
+      switch (typ) {
+      case XID_EVENT:
       {
-        case XID_EVENT:
-          if (ev->log_pos == engine_commit_pos)
+        xid_recovery_member *member;
+
+        if ((member= (xid_recovery_member*)
+             my_hash_search(xids,
+                            (uchar*) &static_cast<Xid_log_event*>(ev)->xid,
+                            sizeof(my_xid))) != NULL)
+        {
+          // in_engine_prepare is examined and set or left to stay
+          // either to/as 0 for to-commit mark, or non-zero for rollback
+          if (likely(last_gtid_extra_engines == 0))
           {
-            found_engine_commit_pos= true;
+            if (member->in_engine_prepare > 1)
+            {
+              sql_print_error("Error to recovery multi-engine transaction");
+              error= 1;
+              goto end;
+            }
+            else
+            {
+              DBUG_ASSERT(member->in_engine_prepare == 1);
+
+              binlog_truncate_pos= tmp_truncate_pos; // found
+            }
           }
-          break;
-        case GTID_LIST_EVENT:
+          else
           {
-            Gtid_list_log_event *glev= (Gtid_list_log_event *)ev;
+            if (member->in_engine_prepare > 1 + last_gtid_extra_engines)
+            {
+              sql_print_error("Error to recovery multi-engine transaction");
+              error= 1;
+              goto end;
+            }
+            else if (member->in_engine_prepare < 1 + last_gtid_extra_engines)
+            {
+              member->in_engine_prepare= 0; // partly committed, to complete
+            }
+            else
+            {
+              binlog_truncate_pos= tmp_truncate_pos; // found
+            }
+          }
+        }
+      }
+      break;
+      case GTID_LIST_EVENT:
+      {
+        Gtid_list_log_event *glev= (Gtid_list_log_event *)ev;
             /* Initialise the binlog state from the Gtid_list event. */
-            if (!found_truncate_pos && glev->count > 0 &&
+            if (binlog_truncate_pos == 0  && glev->count > 0 &&
                 rpl_global_gtid_binlog_state.load(glev->list, glev->count))
             {
               error= 1;
@@ -9945,41 +9959,37 @@ int TC_LOG_BINLOG::heuristic_binlog_rollback()
                               "event.");
               goto end;
             }
-          }
-          break;
-        case GTID_EVENT:
-          {
-            Gtid_log_event *gev= (Gtid_log_event *)ev;
-
-            /* Update the binlog state with any GTID logged after Gtid_list. */
-            last_gtid.domain_id= gev->domain_id;
-            last_gtid.server_id= gev->server_id;
-            last_gtid.seq_no= gev->seq_no;
-            last_gtid_standalone=
-              ((gev->flags2 & Gtid_log_event::FL_STANDALONE) ? true : false);
-            last_gtid_valid= true;
-            if (gev->flags2 & Gtid_log_event::FL_TRANSACTIONAL &&
-                !found_truncate_pos)
-            {
-              if ((engine_commit_pos == 0 || found_engine_commit_pos))
-              {
-                found_truncate_pos= true;
-                strmake_buf(binlog_truncate_file_name, log_info.log_file_name);
-                binlog_truncate_pos= tmp_truncate_pos;
-              }
-            }
-            else
-            {
-              if (found_truncate_pos)
-                is_safe= false;
-            }
-          }
-          break;
-        default:
+      }
+      break;
+      case GTID_EVENT:
+      {
+        Gtid_log_event *gev= (Gtid_log_event *)ev;
+        /* Update the binlog state with any GTID logged after Gtid_list. */
+        last_gtid.domain_id= gev->domain_id;
+        last_gtid.server_id= gev->server_id;
+        last_gtid.seq_no= gev->seq_no;
+        last_gtid_standalone=
+          ((gev->flags2 & Gtid_log_event::FL_STANDALONE) ? true : false);
+        last_gtid_valid= true;
+        last_gtid_extra_engines= gev->extra_engines;
+        if (gev->flags2 & Gtid_log_event::FL_TRANSACTIONAL &&
+            binlog_truncate_pos == 0)
+        {
+          strmake_buf(binlog_truncate_file_name, log_info.log_file_name);
+          binlog_truncate_pos= tmp_truncate_pos;
+        }
+        else
+        {
+          if (binlog_truncate_pos > 0)
+            is_safe= false;
+        }
+      }
+      break;
+      default:
           /* Nothing. */
-          break;
-      }// End switch
-      if (!found_truncate_pos && last_gtid_valid &&
+        break;
+      } // End switch
+      if (binlog_truncate_pos == 0 && last_gtid_valid &&
           ((last_gtid_standalone && !ev->is_part_of_group(typ)) ||
            (!last_gtid_standalone &&
             (typ == XID_EVENT ||
@@ -10000,7 +10010,7 @@ int TC_LOG_BINLOG::heuristic_binlog_rollback()
       tmp_truncate_pos= ev->log_pos;
       delete ev;
       ev= NULL;
-    }// End While
+    } // End While
     if (file >= 0)
     {
       end_io_cache(&log);
@@ -10037,7 +10047,7 @@ int TC_LOG_BINLOG::heuristic_binlog_rollback()
   sql_print_information("tc-heuristic-recover: Binary log to be truncated "
                         "File:%s Pos:%llu.", binlog_truncate_file_name,
                         binlog_truncate_pos);
-  if (!found_truncate_pos)
+  if (binlog_truncate_pos == 0)
     goto end; // Nothing to truncate
   else
     DBUG_ASSERT(binlog_truncate_pos > 0);
@@ -10074,17 +10084,10 @@ end:
     mysql_file_close(file, MYF(MY_WME));
   }
   if (error)
-  {
-    if (is_checkpoint_based_recovery)
-    {
-      sql_print_error("tc-heuristic-recover failed during binary log rollback."
-                      "Further retry attemps will not be successful.");
-    }
-    else
-      sql_print_error("tc-heuristic-recover failed during binary log rollback. "
-                      "Either correct the problem (if it's, for example, out "
-                      "of memory error) and retry, "
-                      "--tc-heuristic-recover=rollback");
+    sql_print_error("tc-heuristic-recover failed during binary log rollback."
+                    "Further retry attemps will not be successful.");
+  else
+  {    // ... error= ha_recover_complete(&xids);
   }
 
 #endif

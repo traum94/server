@@ -42,7 +42,7 @@ class TC_LOG
 {
   public:
   int using_heuristic_recover(const char* opt_name);
-  virtual int heuristic_binlog_rollback() { return 0; };
+  virtual int heuristic_binlog_rollback(HASH *commit_hash) { return 0; };
   TC_LOG() {}
   virtual ~TC_LOG() {}
 
@@ -695,7 +695,7 @@ public:
   void commit_checkpoint_notify(void *cookie);
   int recover(LOG_INFO *linfo, const char *last_log_name, IO_CACHE *first_log,
               Format_description_log_event *fdle, bool do_xa);
-  int heuristic_binlog_rollback();
+  int heuristic_binlog_rollback(HASH *commit_hash);
   int do_binlog_recovery(const char *opt_name, bool do_xa_recovery);
 #if !defined(MYSQL_CLIENT)
 
