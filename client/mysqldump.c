@@ -2783,7 +2783,18 @@ static void get_sequence_structure(const char *seq, const char *db)
 
     row= mysql_fetch_row(result);
     fprintf(sql_file, "%s;\n", row[1]);
-
+    
+    // Restore next not cached value from sequence
+    my_snprintf(buff, sizeof(buff), "SELECT next_not_cached_value FROM %s", result_seq);
+    if (mysql_query_with_error_report(mysql, &result, buff))
+    {
+      DBUG_VOID_RETURN;
+    }
+    row= mysql_fetch_row(result);
+    if (row[0])
+    {
+    	fprintf(sql_file, "SELECT SETVAL(%s, %s, 0);\n", result_seq, row[0]);
+    }
     // Sequences will not use inserts, so no need for REPLACE and LOCKS
     mysql_free_result(result);
   }
