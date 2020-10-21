@@ -140,6 +140,8 @@ connection plug_con;
 select USER(),CURRENT_USER();
 connection default;
 disconnect plug_con;
+--sleep 2
+--sleep 2
 DROP USER plug;
 DROP USER plug_dest;
 
