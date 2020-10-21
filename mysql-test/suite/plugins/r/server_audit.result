@@ -196,7 +196,7 @@ drop table t1;
 set global server_audit_events='';
 CREATE USER plug IDENTIFIED WITH 'test_plugin_server' AS 'plug_dest';
 CREATE USER plug_dest IDENTIFIED BY 'plug_dest_passwd';
-connect(localhost,plug,plug_dest,test,16000,/home/hf/wgit/mdev-19443/mysql-test/var/tmp/mysqld.1.sock);
+connect(localhost,plug,plug_dest,test,MYSQL_PORT,MYSQL_SOCK);
 ERROR 28000: Access denied for user 'plug'@'localhost' (using password: YES)
 GRANT PROXY ON plug_dest TO plug;
 select USER(),CURRENT_USER();

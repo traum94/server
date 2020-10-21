@@ -132,9 +132,12 @@ set global server_audit_events='';
 
 CREATE USER plug IDENTIFIED WITH 'test_plugin_server' AS 'plug_dest';
 CREATE USER plug_dest IDENTIFIED BY 'plug_dest_passwd';
+--sleep 2
+--replace_result $MASTER_MYPORT MYSQL_PORT $MASTER_MYSOCK MYSQL_SOCK
 --error ER_ACCESS_DENIED_ERROR : this should fail : no grant
 connect(plug_con,localhost,plug,plug_dest);
 GRANT PROXY ON plug_dest TO plug;
+--sleep 2
 connect(plug_con,localhost,plug,plug_dest);
 connection plug_con;
 select USER(),CURRENT_USER();
