@@ -194,6 +194,16 @@ select 2;
 2
 drop table t1;
 set global server_audit_events='';
+CREATE USER plug IDENTIFIED WITH 'test_plugin_server' AS 'plug_dest';
+CREATE USER plug_dest IDENTIFIED BY 'plug_dest_passwd';
+connect(localhost,plug,plug_dest,test,16000,/home/hf/wgit/mdev-19443/mysql-test/var/tmp/mysqld.1.sock);
+ERROR 28000: Access denied for user 'plug'@'localhost' (using password: YES)
+GRANT PROXY ON plug_dest TO plug;
+select USER(),CURRENT_USER();
+USER()	CURRENT_USER()
+plug@localhost	plug_dest@%
+DROP USER plug;
+DROP USER plug_dest;
 set global server_audit_query_log_limit= 15;
 select (1), (2), (3), (4);
 1	2	3	4
@@ -356,6 +366,46 @@ TIME,HOSTNAME,root,localhost,ID,ID,QUERY,sa_db,'CREATE USER u3 IDENTIFIED BY ***
 TIME,HOSTNAME,root,localhost,ID,ID,QUERY,sa_db,'drop user u1, u2, u3',0
 TIME,HOSTNAME,root,localhost,ID,ID,QUERY,sa_db,'insert into t1 values (1), (2)',0
 TIME,HOSTNAME,root,localhost,ID,ID,QUERY,sa_db,'set global server_audit_events=\'\'',0
+TIME,HOSTNAME,root,localhost,ID,ID,WRITE,mysql,user,
+TIME,HOSTNAME,root,localhost,ID,ID,WRITE,mysql,db,
+TIME,HOSTNAME,root,localhost,ID,ID,WRITE,mysql,tables_priv,
+TIME,HOSTNAME,root,localhost,ID,ID,WRITE,mysql,columns_priv,
+TIME,HOSTNAME,root,localhost,ID,ID,WRITE,mysql,procs_priv,
+TIME,HOSTNAME,root,localhost,ID,ID,WRITE,mysql,proxies_priv,
+TIME,HOSTNAME,root,localhost,ID,ID,WRITE,mysql,roles_mapping,
+TIME,HOSTNAME,root,localhost,ID,ID,QUERY,sa_db,'CREATE USER plug IDENTIFIED WITH \'test_plugin_server\' AS \'plug_dest\'',0
+TIME,HOSTNAME,root,localhost,ID,ID,WRITE,mysql,user,
+TIME,HOSTNAME,root,localhost,ID,ID,WRITE,mysql,db,
+TIME,HOSTNAME,root,localhost,ID,ID,WRITE,mysql,tables_priv,
+TIME,HOSTNAME,root,localhost,ID,ID,WRITE,mysql,columns_priv,
+TIME,HOSTNAME,root,localhost,ID,ID,WRITE,mysql,procs_priv,
+TIME,HOSTNAME,root,localhost,ID,ID,WRITE,mysql,proxies_priv,
+TIME,HOSTNAME,root,localhost,ID,ID,WRITE,mysql,roles_mapping,
+TIME,HOSTNAME,root,localhost,ID,ID,QUERY,sa_db,'CREATE USER plug_dest IDENTIFIED BY *****',0
+TIME,HOSTNAME,plug,localhost,ID,0,FAILED_CONNECT,,,ID
+TIME,HOSTNAME,plug,localhost,ID,0,DISCONNECT,,,0
+TIME,HOSTNAME,root,localhost,ID,ID,WRITE,mysql,user,
+TIME,HOSTNAME,root,localhost,ID,ID,WRITE,mysql,proxies_priv,
+TIME,HOSTNAME,root,localhost,ID,ID,QUERY,sa_db,'GRANT PROXY ON plug_dest TO plug',0
+TIME,HOSTNAME,plug,localhost,ID,0,CONNECT,test,,0
+TIME,HOSTNAME,plug,localhost,ID,0,PROXY_CONNECT,test,`plug_dest`@`%`,0
+TIME,HOSTNAME,plug,localhost,ID,0,DISCONNECT,test,,0
+TIME,HOSTNAME,root,localhost,ID,ID,WRITE,mysql,user,
+TIME,HOSTNAME,root,localhost,ID,ID,WRITE,mysql,db,
+TIME,HOSTNAME,root,localhost,ID,ID,WRITE,mysql,tables_priv,
+TIME,HOSTNAME,root,localhost,ID,ID,WRITE,mysql,columns_priv,
+TIME,HOSTNAME,root,localhost,ID,ID,WRITE,mysql,procs_priv,
+TIME,HOSTNAME,root,localhost,ID,ID,WRITE,mysql,proxies_priv,
+TIME,HOSTNAME,root,localhost,ID,ID,WRITE,mysql,roles_mapping,
+TIME,HOSTNAME,root,localhost,ID,ID,QUERY,sa_db,'DROP USER plug',0
+TIME,HOSTNAME,root,localhost,ID,ID,WRITE,mysql,user,
+TIME,HOSTNAME,root,localhost,ID,ID,WRITE,mysql,db,
+TIME,HOSTNAME,root,localhost,ID,ID,WRITE,mysql,tables_priv,
+TIME,HOSTNAME,root,localhost,ID,ID,WRITE,mysql,columns_priv,
+TIME,HOSTNAME,root,localhost,ID,ID,WRITE,mysql,procs_priv,
+TIME,HOSTNAME,root,localhost,ID,ID,WRITE,mysql,proxies_priv,
+TIME,HOSTNAME,root,localhost,ID,ID,WRITE,mysql,roles_mapping,
+TIME,HOSTNAME,root,localhost,ID,ID,QUERY,sa_db,'DROP USER plug_dest',0
 TIME,HOSTNAME,root,localhost,ID,ID,QUERY,sa_db,'set global serv',0
 TIME,HOSTNAME,root,localhost,ID,ID,QUERY,sa_db,'select (1), (2)',0
 TIME,HOSTNAME,root,localhost,ID,ID,QUERY,sa_db,'select \'A\', ',0
